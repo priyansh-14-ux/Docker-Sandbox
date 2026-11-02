@@ -17,6 +17,7 @@ from medicode.models.content import (
     Problem,
     ProblemDiscussion,
     Submission,
+    SubmissionResult,
     TestCase,
 )
 from medicode.models.identity import AuthSession, Department, Login, Profile, Role, RoleName
@@ -43,6 +44,7 @@ __all__ = [
     "StudentDetail",
     "StudentTermEnrollment",
     "Submission",
+    "SubmissionResult",
     "TermType",
     "TestCase",
 ]

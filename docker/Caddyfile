@@ -1,0 +1,31 @@
+{
+    # Global options
+    auto_https off
+    admin off
+}
+
+:80 {
+    # Logging
+    log {
+        output stdout
+        format json
+    }
+
+    # Proxy all traffic to MediCode FastAPI backend
+    reverse_proxy medicode-api:8000 {
+        header_up X-Real-IP {remote_host}
+        header_up X-Forwarded-For {remote_host}
+        header_up X-Forwarded-Proto {scheme}
+
+        # Timeouts for SSE streaming
+        flush_interval -1
+    }
+
+    # Security Headers
+    header {
+        Strict-Transport-Security "max-age=31536000; includeSubDomains; preload"
+        X-Content-Type-Options "nosniff"
+        X-Frame-Options "DENY"
+        Referrer-Policy "strict-origin-when-cross-origin"
+    }
+}

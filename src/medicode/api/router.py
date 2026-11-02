@@ -7,7 +7,9 @@ from medicode.api.routes.discussions import router as discussions_router
 from medicode.api.routes.enrollments import router as enrollments_router
 from medicode.api.routes.labs import router as labs_router
 from medicode.api.routes.submissions import router as submissions_router
+from medicode.api.routes.submissions import run_code
 from medicode.api.routes.users import router as users_router
+from medicode.schemas.submissions import RunCodeResponse
 
 api_router = APIRouter()
 api_router.include_router(auth_router, prefix="/auth", tags=["auth"])
@@ -18,3 +20,14 @@ api_router.include_router(labs_router, prefix="/courses", tags=["labs"])
 api_router.include_router(submissions_router, prefix="/submissions", tags=["submissions"])
 api_router.include_router(admin_router, prefix="/admin", tags=["admin"])
 api_router.include_router(discussions_router, prefix="/problems", tags=["discussions"])
+
+# Alias for /api/run to match spec
+api_router.add_api_route(
+    "/run",
+    endpoint=run_code,
+    methods=["POST"],
+    response_model=RunCodeResponse,
+    tags=["submissions"],
+    summary="Direct code execution endpoint",
+    description="Alias for /api/submissions/run.",
+)

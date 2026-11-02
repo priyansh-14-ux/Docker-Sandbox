@@ -1,12 +1,14 @@
 services:
+  # 1. MediCode Main Application Database
   postgres:
     image: postgres:16
+    restart: unless-stopped
     environment:
       POSTGRES_DB: postgres
       POSTGRES_USER: postgres
       POSTGRES_PASSWORD: ${POSTGRES_ADMIN_PASSWORD:?Set POSTGRES_ADMIN_PASSWORD in .env}
-      MEDICODE_DB: ${MEDICODE_DB:?Set MEDICODE_DB in .env}
-      MEDICODE_DB_USER: ${MEDICODE_DB_USER:?Set MEDICODE_DB_USER in .env}
+      MEDICODE_DB: ${MEDICODE_DB:-medicode}
+      MEDICODE_DB_USER: ${MEDICODE_DB_USER:-medicode}
       MEDICODE_DB_PASSWORD: ${MEDICODE_DB_PASSWORD:?Set MEDICODE_DB_PASSWORD in .env}
     ports:
       - "127.0.0.1:5432:5432"
@@ -18,12 +20,247 @@ services:
       interval: 5s
       timeout: 5s
       retries: 5
+    networks:
+      - medicode-public
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
 
+  # 2. Redis for ARQ Job Queue, Submission Rate Limiting & Result Caching
+  medicode-redis:
+    image: redis:7-alpine
+    restart: unless-stopped
+    command: ["redis-server", "--appendonly", "no", "--maxmemory", "256mb", "--maxmemory-policy", "allkeys-lru"]
+    ports:
+      - "127.0.0.1:6379:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+    networks:
+      - medicode-public
+      - judge0-network
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+  # 3. MediCode FastAPI Control Plane
+  medicode-api:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    restart: unless-stopped
+    command: ["uvicorn", "medicode.main:app", "--host", "0.0.0.0", "--port", "8000", "--workers", "2"]
+    environment:
+      APP_NAME: ${APP_NAME:-MediCode}
+      APP_ENV: ${APP_ENV:-production}
+      APP_DEBUG: ${APP_DEBUG:-false}
+      DATABASE_URL: ${DATABASE_URL:-postgresql+asyncpg://medicode:${MEDICODE_DB_PASSWORD}@postgres:5432/${MEDICODE_DB:-medicode}}
+      AUTH_SECRET_KEY: ${AUTH_SECRET_KEY:?Set AUTH_SECRET_KEY in .env}
+      REDIS_URL: redis://medicode-redis:6379/0
+      ARQ_QUEUE_NAME: medicode:submissions
+      EXECUTION_PROVIDER: ${EXECUTION_PROVIDER:-judge0_self}
+      JUDGE0_URL: http://judge0-server:2358
+      JUDGE0_AUTH_HEADER: ${JUDGE0_AUTH_HEADER:-X-Auth-Token}
+      JUDGE0_AUTH_TOKEN: ${JUDGE0_AUTH_TOKEN:-medicode-judge0-secret-token}
+      PYTHON_LANGUAGE_ID: 71
+    depends_on:
+      postgres:
+        condition: service_healthy
+      medicode-redis:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+    deploy:
+      resources:
+        limits:
+          cpus: "1.0"
+          memory: 512M
+    networks:
+      - medicode-public
+      - judge0-network
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+  # 4. MediCode ARQ Background Judging Worker (Same image, dedicated container)
+  medicode-worker:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    restart: unless-stopped
+    command: ["python", "-m", "medicode.workers.submission_worker"]
+    environment:
+      APP_NAME: ${APP_NAME:-MediCode}
+      APP_ENV: ${APP_ENV:-production}
+      DATABASE_URL: ${DATABASE_URL:-postgresql+asyncpg://medicode:${MEDICODE_DB_PASSWORD}@postgres:5432/${MEDICODE_DB:-medicode}}
+      AUTH_SECRET_KEY: ${AUTH_SECRET_KEY:?Set AUTH_SECRET_KEY in .env}
+      REDIS_URL: redis://medicode-redis:6379/0
+      ARQ_QUEUE_NAME: medicode:submissions
+      EXECUTION_PROVIDER: ${EXECUTION_PROVIDER:-judge0_self}
+      JUDGE0_URL: http://judge0-server:2358
+      JUDGE0_AUTH_HEADER: ${JUDGE0_AUTH_HEADER:-X-Auth-Token}
+      JUDGE0_AUTH_TOKEN: ${JUDGE0_AUTH_TOKEN:-medicode-judge0-secret-token}
+      PYTHON_LANGUAGE_ID: 71
+    depends_on:
+      postgres:
+        condition: service_healthy
+      medicode-redis:
+        condition: service_healthy
+    deploy:
+      resources:
+        limits:
+          cpus: "1.0"
+          memory: 512M
+    networks:
+      - judge0-network
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+  # 5. Judge0 Internal Postgres Database
+  judge0-db:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: judge0
+      POSTGRES_USER: judge0
+      POSTGRES_PASSWORD: ${JUDGE0_DB_PASSWORD:-judge0securepassword}
+    volumes:
+      - medicode-judge0-db-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U judge0 -d judge0"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+    networks:
+      - judge0-network
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+  # 6. Judge0 Internal Redis
+  judge0-redis:
+    image: redis:7-alpine
+    restart: unless-stopped
+    command: ["redis-server", "--appendonly", "no", "--maxmemory", "128mb"]
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+    networks:
+      - judge0-network
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+  # 7. Judge0 Server API (Pinned tag v1.13.1, private internal network only)
+  judge0-server:
+    image: judge0/judge0:v1.13.1
+    restart: unless-stopped
+    volumes:
+      - ./docker/judge0.conf:/judge0.conf:ro
+    environment:
+      POSTGRES_HOST: judge0-db
+      POSTGRES_PORT: 5432
+      POSTGRES_DATABASE: judge0
+      POSTGRES_USER: judge0
+      POSTGRES_PASSWORD: ${JUDGE0_DB_PASSWORD:-judge0securepassword}
+      REDIS_HOST: judge0-redis
+      REDIS_PORT: 6379
+    depends_on:
+      judge0-db:
+        condition: service_healthy
+      judge0-redis:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:2358/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 15s
+    networks:
+      - judge0-network
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+  # 8. Judge0 Sandbox Worker (Runs untrusted Python in Isolate sandbox)
+  judge0-workers:
+    image: judge0/judge0:v1.13.1
+    restart: unless-stopped
+    privileged: true
+    command: ["./scripts/workers"]
+    volumes:
+      - ./docker/judge0.conf:/judge0.conf:ro
+    environment:
+      POSTGRES_HOST: judge0-db
+      POSTGRES_PORT: 5432
+      POSTGRES_DATABASE: judge0
+      POSTGRES_USER: judge0
+      POSTGRES_PASSWORD: ${JUDGE0_DB_PASSWORD:-judge0securepassword}
+      REDIS_HOST: judge0-redis
+      REDIS_PORT: 6379
+    depends_on:
+      judge0-server:
+        condition: service_healthy
+    networks:
+      - judge0-network
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+  # 9. Reverse Proxy (Caddy with automated HTTPS)
+  caddy:
+    image: caddy:2-alpine
+    restart: unless-stopped
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./docker/Caddyfile:/etc/caddy/Caddyfile:ro
+      - medicode-caddy-data:/data
+      - medicode-caddy-config:/config
+    depends_on:
+      medicode-api:
+        condition: service_healthy
+    networks:
+      - medicode-public
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+  # 10. Optional Database Management Tool (pgAdmin)
   pgadmin:
     image: dpage/pgadmin4:latest
+    restart: unless-stopped
     environment:
-      PGADMIN_DEFAULT_EMAIL: ${PGADMIN_DEFAULT_EMAIL:?Set PGADMIN_DEFAULT_EMAIL in .env}
-      PGADMIN_DEFAULT_PASSWORD: ${PGADMIN_DEFAULT_PASSWORD:?Set PGADMIN_DEFAULT_PASSWORD in .env}
+      PGADMIN_DEFAULT_EMAIL: ${PGADMIN_DEFAULT_EMAIL:-admin@medicode.example.com}
+      PGADMIN_DEFAULT_PASSWORD: ${PGADMIN_DEFAULT_PASSWORD:-admin1234}
       PGADMIN_CONFIG_SERVER_MODE: "False"
       PGADMIN_SERVER_JSON_FILE: /pgadmin4/servers.json
     ports:
@@ -34,13 +271,21 @@ services:
     depends_on:
       postgres:
         condition: service_healthy
-    healthcheck:
-      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost/misc/ping')"]
-      interval: 10s
-      timeout: 5s
-      retries: 10
-      start_period: 30s
+    networks:
+      - medicode-public
 
 volumes:
   medicode-postgres-data:
   medicode-pgadmin-data:
+  medicode-judge0-db-data:
+  medicode-caddy-data:
+  medicode-caddy-config:
+
+networks:
+  # Public-facing network for reverse proxy and API
+  medicode-public:
+    driver: bridge
+  # Internal, isolated network for Judge0 and sandbox components
+  judge0-network:
+    driver: bridge
+    internal: true

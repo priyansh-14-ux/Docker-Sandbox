@@ -18,6 +18,9 @@ dependencies = [
     "email-validator",
     "PyJWT",
     "argon2-cffi",
+    "httpx",
+    "redis",
+    "arq",
 ]
 
 [project.optional-dependencies]

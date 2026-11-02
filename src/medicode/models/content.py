@@ -3,9 +3,11 @@ from decimal import Decimal
 from uuid import UUID
 
 from sqlalchemy import (
+    Boolean,
     CheckConstraint,
     DateTime,
     ForeignKey,
+    Index,
     Integer,
     Numeric,
     String,
@@ -61,9 +63,14 @@ class Problem(UUIDPrimaryKeyMixin, TimestampMixin, Base):
     difficulty: Mapped[str] = mapped_column(String(16), nullable=False, default="MEDIUM")
     time_limit_ms: Mapped[int] = mapped_column(Integer, nullable=False, default=2000)
     memory_limit_mb: Mapped[int] = mapped_column(Integer, nullable=False, default=256)
+    comparison_mode: Mapped[str] = mapped_column(
+        String(32), nullable=False, default="ignore_whitespace"
+    )
     is_published: Mapped[bool] = mapped_column(nullable=False, default=False)
     experiment: Mapped[Experiment] = relationship(back_populates="problems")
-    test_cases: Mapped[list["TestCase"]] = relationship(back_populates="problem")
+    test_cases: Mapped[list["TestCase"]] = relationship(
+        back_populates="problem", order_by="TestCase.sort_order"
+    )
 
 
 class TestCase(UUIDPrimaryKeyMixin, Base):
@@ -88,6 +95,7 @@ class Submission(UUIDPrimaryKeyMixin, Base):
     __tablename__ = "submissions"
     __table_args__ = (
         CheckConstraint("octet_length(source_code) <= 65536", name="submission_source_size"),
+        Index("ix_submissions_student_problem_created", "student_profile_id", "problem_id", "created_at"),
     )
 
     student_profile_id: Mapped[UUID] = mapped_column(
@@ -96,18 +104,54 @@ class Submission(UUIDPrimaryKeyMixin, Base):
     problem_id: Mapped[UUID] = mapped_column(
         ForeignKey("problems.id", ondelete="RESTRICT"), nullable=False, index=True
     )
-    course_enrollment_id: Mapped[UUID] = mapped_column(
-        ForeignKey("course_enrollments.id", ondelete="RESTRICT"), nullable=False, index=True
+    course_enrollment_id: Mapped[UUID | None] = mapped_column(
+        ForeignKey("course_enrollments.id", ondelete="RESTRICT"), nullable=True, index=True
     )
     source_code: Mapped[str] = mapped_column(Text, nullable=False)
     language: Mapped[str] = mapped_column(String(16), nullable=False, default="python")
-    status: Mapped[str] = mapped_column(String(24), nullable=False, default="RECEIVED")
+    status: Mapped[str] = mapped_column(String(24), nullable=False, default="QUEUED")
+    verdict: Mapped[str | None] = mapped_column(String(16))
     score: Mapped[Decimal | None] = mapped_column(Numeric(5, 2))
+    time_ms: Mapped[int | None] = mapped_column(Integer)
+    memory_kb: Mapped[int | None] = mapped_column(Integer)
+    passed_test_cases: Mapped[int | None] = mapped_column(Integer, default=0)
+    total_test_cases: Mapped[int | None] = mapped_column(Integer, default=0)
+    error_message: Mapped[str | None] = mapped_column(Text)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False, server_default="now()"
     )
     student_profile: Mapped["Profile"] = relationship()
     problem: Mapped[Problem] = relationship()
+    results: Mapped[list["SubmissionResult"]] = relationship(
+        back_populates="submission",
+        cascade="all, delete-orphan",
+        order_by="SubmissionResult.test_number",
+    )
+
+
+class SubmissionResult(UUIDPrimaryKeyMixin, Base):
+    __tablename__ = "submission_results"
+
+    submission_id: Mapped[UUID] = mapped_column(
+        ForeignKey("submissions.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    test_case_id: Mapped[UUID | None] = mapped_column(
+        ForeignKey("test_cases.id", ondelete="SET NULL"), nullable=True, index=True
+    )
+    test_number: Mapped[int] = mapped_column(Integer, nullable=False)
+    verdict: Mapped[str] = mapped_column(String(16), nullable=False)
+    time_ms: Mapped[int | None] = mapped_column(Integer)
+    memory_kb: Mapped[int | None] = mapped_column(Integer)
+    stdout: Mapped[str | None] = mapped_column(Text)
+    stderr: Mapped[str | None] = mapped_column(Text)
+    error_message: Mapped[str | None] = mapped_column(Text)
+    is_hidden: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default="now()"
+    )
+
+    submission: Mapped[Submission] = relationship(back_populates="results")
+    test_case: Mapped[TestCase | None] = relationship()
 
 
 class ProblemDiscussion(UUIDPrimaryKeyMixin, Base):

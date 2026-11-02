@@ -1,0 +1,42 @@
+services:
+  medicode-api:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    command: ["uvicorn", "medicode.main:app", "--host", "0.0.0.0", "--port", "8000", "--reload"]
+    volumes:
+      - ./src:/app/src
+      - ./alembic:/app/alembic
+    ports:
+      - "127.0.0.1:8000:8000"
+    environment:
+      APP_ENV: development
+      APP_DEBUG: "true"
+      DATABASE_URL: postgresql+asyncpg://medicode:medicode@postgres:5432/medicode
+      REDIS_URL: redis://medicode-redis:6379/0
+      JUDGE0_URL: http://judge0-server:2358
+      AUTH_SECRET_KEY: dev-secret-key-for-local-testing-only-12345
+    depends_on:
+      postgres:
+        condition: service_healthy
+      medicode-redis:
+        condition: service_healthy
+
+  medicode-worker:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    command: ["python", "-m", "medicode.workers.submission_worker"]
+    volumes:
+      - ./src:/app/src
+    environment:
+      APP_ENV: development
+      DATABASE_URL: postgresql+asyncpg://medicode:medicode@postgres:5432/medicode
+      REDIS_URL: redis://medicode-redis:6379/0
+      JUDGE0_URL: http://judge0-server:2358
+      AUTH_SECRET_KEY: dev-secret-key-for-local-testing-only-12345
+    depends_on:
+      postgres:
+        condition: service_healthy
+      medicode-redis:
+        condition: service_healthy

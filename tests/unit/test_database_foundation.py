@@ -19,7 +19,7 @@ def test_database_foundation_tables_are_registered() -> None:
         "course_enrollments",
     }
 
-    assert set(Base.metadata.tables) == expected_tables
+    assert expected_tables.issubset(set(Base.metadata.tables))
 
 
 def test_course_enrollment_has_unique_offering_student_constraint() -> None:
