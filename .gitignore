@@ -6,7 +6,7 @@ dist/
 build/
 .venv/
 venv/
-
+*.egg-info/
 # Environment and secrets
 .env
 .env.*

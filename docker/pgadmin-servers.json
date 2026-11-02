@@ -1,0 +1,13 @@
+{
+  "Servers": {
+    "1": {
+      "Name": "MediCode PostgreSQL",
+      "Group": "Servers",
+      "Host": "postgres",
+      "Port": 5432,
+      "MaintenanceDB": "medicode",
+      "Username": "medicode",
+      "SSLMode": "prefer"
+    }
+  }
+}

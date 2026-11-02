@@ -112,11 +112,12 @@ def require_role(*roles):
         if user.role not in roles:
             raise HTTPException(403, "Not permitted")
         return user
+
     return checker
 
+
 @router.post("/courses")
-def create_course(data: CourseCreate, user=Depends(require_role("instructor", "admin"))):
-    ...
+def create_course(data: CourseCreate, user=Depends(require_role("instructor", "admin"))): ...
 ```
 
 This pattern keeps authorization logic out of the route body and composable across endpoints.
@@ -292,11 +293,13 @@ class SubmissionCreate(BaseModel):
     code: str
     language: Literal["python", "cpp", "java"]
 
+
 class SubmissionResultOut(BaseModel):
     test_case_id: int
     passed: bool
     execution_time_ms: int
     stderr: str | None = None
+
 
 class SubmissionOut(BaseModel):
     id: UUID
